@@ -1,19 +1,155 @@
 ---
-title: "R Notebook"
+title: "15.077 Final Project"
 output: html_notebook
 ---
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+```{r warning = FALSE}
 
-Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+#Load Packages
 
-```{r}
-plot(cars)
+library(tidyverse)
+library(adabag)
+library(caret)
+library(randomForest)
+library(e1071)
+library(lookup)
+library(lubridate)
+
 ```
 
-Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+```{r}
+#Merging Station and Store Number into one dataset
 
-When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+weather.storedata <-join(weather, key, by="station_nbr")
+train.data <- join(train, weather.storedata, by = c("date", "store_nbr"))
+test.data <- join(test, weather.storedata, by = c("date", "store_nbr"))
 
-The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+```
 
+```{r}
+#Explore Dataset
+
+table(train.data$units)
+
+store.date.summary <- train.data %>% group_by(date, store_nbr) %>% summarize(counts = sum(units))
+overall.date.summary <- train.data %>% group_by(date) %>% summarize(counts = sum(units))
+
+item.date.summary <- train.data %>% group_by(date, item_nbr) %>% summarize(counts = sum(units))
+
+
+#symbols(x=1:length(store.date.summary$date), y=store.date.summary$store_nbr, circles=sqrt(store.date.summary$counts/pi), inches=1/3, ann=F, bg="steelblue2", fg=NULL)
+
+#ggplot(store.date.summary, aes(x=date, y=counts, group = store_nbr, col = store_nbr)) + geom_point()
+
+store.data.nonzero <- filter(store.date.summary, counts>0)
+item.data.nonzero <- filter(item.date.summary, counts>0)
+
+par(mfrow = c(2,2))
+plot(table((store.date.summary$counts)), xlim = c(0,400))
+plot(table((store.data.nonzero$counts)), xlim = c(0,400))
+plot(table((item.date.summary$counts)), xlim = c(0,40))
+plot(table((item.data.nonzero$counts)), xlim = c(0,40))
+
+#ggplot(store.data.nonzero, aes(x=date, y=counts, group = store_nbr, col = store_nbr)) + geom_point()
+#ggplot(overall.date.summary, aes(x=date, y=counts)) + geom_point() + geom_smooth()
+
+overall.date.summary <- cbind(overall.date.summary,days = 1:length(overall.date.summary$date))
+
+ggplot(overall.date.summary, aes(x=days, y=counts)) + geom_point() + geom_smooth()
+
+ggplot(overall.date.summary, aes(x=days, y=counts)) + geom_point() + geom_smooth(method = 'lm')
+
+simple.lm <- glm(data = overall.date.summary, counts ~ days)
+
+summary(simple.lm)
+
+
+par(mfrow = c(1,1))
+qqnorm(simple.lm$residuals)
+qqline(simple.lm$residuals)
+
+```
+
+```{r}
+
+boxplot(counts~store_nbr, data=store.date.summary, ylim = c(0,800), xlab="Store Number", ylab = "Items Sold Per Day")
+boxplot(counts~item_nbr, data=item.date.summary, ylim = c(0,1200), xlab="Item Number", ylab = "Items Sold Per Day")
+
+```
+
+```{r}
+
+store.date.summary <- cbind(store.date.summary,day = weekdays(as.Date(store.date.summary$date)))
+store.date.summary <- cbind(store.date.summary,year = year(as.Date(store.date.summary$date)))
+store.date.summary <- cbind(store.date.summary,month = months(as.Date(store.date.summary$date)))
+
+
+store.month.year.summary <- store.date.summary %>% group_by(store_nbr,month, year) %>% summarize(total_units = sum(counts))
+overall.month.year.summary <- store.date.summary %>% group_by(month, year) %>% summarize(total_units = sum(counts))
+
+overall.month.year.summary$month <- factor(overall.month.year.summary$month, levels = month.name)
+overall.month.year.summary$year <- factor(overall.month.year.summary$year)
+overall.month.year.summary$monthyear <- ymd(paste(overall.month.year.summary$year, overall.month.year.summary$month,01))
+
+store.month.year.summary$month <- factor(store.month.year.summary$month, levels = month.name)
+store.month.year.summary$year <- factor(store.month.year.summary$year)
+store.month.year.summary$monthyear <- ymd(paste(store.month.year.summary$year, store.month.year.summary$month,01))
+
+store.month.summary <- store.date.summary %>% group_by(store_nbr,month) %>% summarize(monthly_sales = sum(counts))
+
+store.month.summary$month <- factor(store.month.summary$month, levels = month.name)
+
+
+
+```
+
+```{r}
+
+boxplot(counts~day, data=store.date.summary, ylim = c(0,800), xlab="Store Number", ylab = "Items Sold Per Day")
+boxplot(monthly_sales~month, data=store.month.summary, xlab="Month", ylab = "Items Sold Per Day")
+
+ggplot(store.month.summary, aes(x=month, y=monthly_sales, group = store_nbr, col = store_nbr, sort = month)) + geom_point() + geom_line()
+
+plot_table <- xtabs(total_units ~ year + month, data = overall.month.year.summary)
+
+barplot(plot_table,
+        main = "Grouped barchart",
+        xlab = "Month", ylab = "Unit Sales",
+        col = c("darkgrey", "darkblue", "red"),
+        legend.text = rownames(plot_table),
+        beside = TRUE) # Grouped bars
+
+ggplot(overall.month.year.summary, aes(x=month, y=total_units, group = year, col = year)) + geom_point() + geom_line() + xlab('Month') + ylab('Tital Units Sold')
+
+ggplot(overall.month.year.summary, aes(x=monthyear, y=total_units)) + geom_point() + geom_line() + xlab('Date') + ylab('Tital Units Sold')
+
+boxplot(total_units ~ monthyear, data = store.month.year.summary, xlab="Date", ylab = "Unit Variance By Store")
+
+```
+```{r}
+item.date.summary <- cbind(item.date.summary,day = weekdays(as.Date(item.date.summary$date)))
+item.date.summary <- cbind(item.date.summary,year = year(as.Date(item.date.summary$date)))
+item.date.summary <- cbind(item.date.summary,month = months(as.Date(item.date.summary$date)))
+
+item.month.summary <- item.date.summary %>% group_by(item_nbr,month) %>% summarize(monthly_sales = sum(counts))
+item.month.summary$month <- factor(item.month.summary$month, levels = month.name)
+
+
+item.month.year.summary <- item.date.summary %>% group_by(item_nbr,month, year) %>% summarize(total_units = sum(counts))
+item.month.year.summary$month <- factor(item.month.year.summary$month, levels = month.name)
+item.month.year.summary$year <- factor(item.month.year.summary$year)
+item.month.year.summary$monthyear <- ymd(paste(item.month.year.summary$year, item.month.year.summary$month,01))
+```
+
+```{r}
+
+boxplot(counts~day, data=item.date.summary, xlab="Item Number", ylab = "Items Sold Per Day")
+boxplot(monthly_sales~month, data=item.month.summary, xlab="Month", ylab = "Items Sold Per Day")
+
+ggplot(item.month.summary, aes(x=month, y=monthly_sales, group = as.factor(item_nbr), col = as.factor(item_nbr), sort = month)) + geom_point() + geom_line()
+
+
+boxplot(total_units ~ monthyear, data = item.month.year.summary, xlab="Date", ylab = "Unit Variance By Store")
+
+
+```
